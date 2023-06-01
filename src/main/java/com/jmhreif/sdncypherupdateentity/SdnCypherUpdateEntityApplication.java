@@ -8,6 +8,7 @@ import org.neo4j.driver.Driver;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
+import org.springframework.data.annotation.ReadOnlyProperty;
 import org.springframework.data.neo4j.core.ReactiveDatabaseSelectionProvider;
 import org.springframework.data.neo4j.core.schema.GeneratedValue;
 import org.springframework.data.neo4j.core.schema.Id;
@@ -63,20 +64,11 @@ class ReviewController {
 	Mono<Review> save(@RequestBody Review review) {
 		System.out.println(review);
 
-		//set updated values for ratings
-		Book dbBook = bookRepo.findBookByBook_id(review.getBook().getBook_id()).block();
-		if (dbBook.getRatings_count() == null) {
-			dbBook.setRatings_count(0);
-		}
-		review.getBook().setRatings_count(dbBook.getRatings_count()+1);
-		if (dbBook.getAverage_rating() == null) {
-			dbBook.setAverage_rating(0);
-		}
-		review.getBook().setAverage_rating(((dbBook.getAverage_rating()*dbBook.getRatings_count())+review.getRating()) / (dbBook.getRatings_count()+1));
-		System.out.println(review);
-
 		Mono<Review> savedReview = reviewRepo.save(review);
 		System.out.println(savedReview.block());
+
+		Flux<Book> bookRecommendations = bookRepo.getRecommendations();
+		bookRecommendations.doOnNext(System.out::println).blockLast();
 
 		return savedReview;
 	}
@@ -87,8 +79,13 @@ interface ReviewRepository extends ReactiveCrudRepository<Review, String> {
 }
 
 interface BookRepository extends ReactiveCrudRepository<Book, String> {
-	@Query("MATCH (b:Book {book_id: $book_id}) RETURN b;")
-	Mono<Book> findBookByBook_id(String book_id);
+	@Query("MATCH (b:Book)<-[:WRITTEN_FOR]-(r:Review)\n" +
+			"WITH b, r, b.book_id as book_id, COUNT {(r)-[:WRITTEN_FOR]->(b)} as ratings_count\n" +
+			"WITH r, book_id, ratings_count, SUM(r.rating) / ratings_count as average_rating\n" +
+			"RETURN DISTINCT(book_id), ratings_count, average_rating\n" +
+			"ORDER BY average_rating DESC, ratings_count DESC\n" +
+			"LIMIT 10;")
+	Flux<Book> getRecommendations();
 }
 
 @Data
@@ -110,5 +107,8 @@ class Book {
 	@Id
 	private String book_id;
 
-	private Integer ratings_count, average_rating;
+	@ReadOnlyProperty
+	private Integer ratings_count;
+	@ReadOnlyProperty
+	private Integer average_rating;
 }
