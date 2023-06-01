@@ -63,20 +63,11 @@ class ReviewController {
 	Mono<Review> save(@RequestBody Review review) {
 		System.out.println(review);
 
-		//set updated values for ratings
-		Book dbBook = bookRepo.findBookByBook_id(review.getBook().getBook_id()).block();
-		if (dbBook.getRatings_count() == null) {
-			dbBook.setRatings_count(0);
-		}
-		review.getBook().setRatings_count(dbBook.getRatings_count()+1);
-		if (dbBook.getAverage_rating() == null) {
-			dbBook.setAverage_rating(0);
-		}
-		review.getBook().setAverage_rating(((dbBook.getAverage_rating()*dbBook.getRatings_count())+review.getRating()) / (dbBook.getRatings_count()+1));
-		System.out.println(review);
-
 		Mono<Review> savedReview = reviewRepo.save(review);
 		System.out.println(savedReview.block());
+
+		Mono<Book> updatedBook =  bookRepo.updateBookEntity(review);
+		System.out.println(updatedBook.block());
 
 		return savedReview;
 	}
@@ -87,8 +78,14 @@ interface ReviewRepository extends ReactiveCrudRepository<Review, String> {
 }
 
 interface BookRepository extends ReactiveCrudRepository<Book, String> {
-	@Query("MATCH (b:Book {book_id: $book_id}) RETURN b;")
-	Mono<Book> findBookByBook_id(String book_id);
+	@Query("""
+   			WITH $review as review
+			MATCH (b:Book {book_id: review.__properties__.WRITTEN_FOR[0].__id__})
+			WITH review, b, b.ratings_count+1 as newRatingsCount
+			SET b.ratings_count = newRatingsCount,
+			b.average_rating = ((b.average_rating*(newRatingsCount-1))+review.__properties__.rating)/newRatingsCount
+			RETURN b""")
+	Mono<Book> updateBookEntity(Review review);
 }
 
 @Data
@@ -109,6 +106,4 @@ class Review {
 class Book {
 	@Id
 	private String book_id;
-
-	private Integer ratings_count, average_rating;
 }
